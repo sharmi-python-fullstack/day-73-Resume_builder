@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-const GEMINI_MODEL = 'gemini-3.5-flash-lite'
-
 const emptyEducation = { schoolName: '', degree: '', graduationYear: '' }
 const emptyExperience = {
   jobTitle: '',
@@ -16,17 +14,25 @@ const emptyExperience = {
 const inputClassName =
   'mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100'
 
-async function getGeminiErrorMessage(response) {
-  const responseBody = await response.text()
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+
+async function postToApi(endpoint, body) {
+  const response = await fetch(`${apiBaseUrl}/api/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  let result
   try {
-    const error = JSON.parse(responseBody).error
-    if (typeof error?.message === 'string') {
-      return `Gemini request failed (${response.status}): ${error.message}`
-    }
+    result = await response.json()
   } catch {
-    // Use the HTTP status when the server does not return a JSON error.
+    throw new Error(`AI service returned an invalid response (${response.status}).`)
   }
-  return `Gemini request failed (${response.status})${response.statusText ? `: ${response.statusText}` : '.'}`
+  if (!response.ok) {
+    throw new Error(result.error || `AI service request failed (${response.status}).`)
+  }
+  return result
 }
 
 function Field({ label, value, onChange, placeholder, type = 'text' }) {
@@ -118,57 +124,14 @@ function App() {
   }
 
   const fetchSuggestions = async () => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-    if (!apiKey) {
-      setSuggestionsError(
-        'Add VITE_GEMINI_API_KEY to your .env file to load AI skill suggestions.',
-      )
-      return
-    }
-
     setSuggestionsLoading(true)
     setSuggestionsError('')
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: 'Suggest 10 professional skills for a software developer. Return only a JSON array of short skill names.',
-                  },
-                ],
-              },
-            ],
-            generationConfig: { responseMimeType: 'application/json' },
-          }),
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(await getGeminiErrorMessage(response))
+      const { skills: suggestions } = await postToApi('skills', {})
+      if (!Array.isArray(suggestions) || suggestions.some((skill) => typeof skill !== 'string')) {
+        throw new Error('AI service returned an unexpected skills response.')
       }
-
-      const result = await response.json()
-      const responseText = result.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? '')
-        .join('')
-      if (!responseText) {
-        throw new Error('Gemini returned no skill suggestions. Please try again.')
-      }
-
-      const parsedSkills = JSON.parse(responseText)
-      if (
-        !Array.isArray(parsedSkills) ||
-        parsedSkills.some((skill) => typeof skill !== 'string')
-      ) {
-        throw new Error('Gemini returned an unexpected response. Please try again.')
-      }
-      setSuggestedSkills(parsedSkills.map((skill) => skill.trim()).filter(Boolean).slice(0, 10))
+      setSuggestedSkills(suggestions.map((skill) => skill.trim()).filter(Boolean).slice(0, 10))
     } catch (error) {
       setSuggestionsError(
         error instanceof Error ? error.message : 'Unable to load skill suggestions.',
@@ -179,14 +142,6 @@ function App() {
   }
 
   const generateSummary = async () => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-    if (!apiKey) {
-      setSummaryError(
-        'Add VITE_GEMINI_API_KEY to your .env file to generate a professional summary.',
-      )
-      return
-    }
-
     const background = summaryInput.trim()
     if (!background) {
       setSummaryError('Enter a few keywords or details about your professional background first.')
@@ -196,38 +151,11 @@ function App() {
     setSummaryLoading(true)
     setSummaryError('')
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Write a concise, professional resume summary based on the following keywords and background. Use first person implied (no "I"), avoid inventing facts, and return only the summary paragraph:\n\n${background}`,
-                  },
-                ],
-              },
-            ],
-          }),
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(await getGeminiErrorMessage(response))
-      }
-
-      const result = await response.json()
-      const generatedText = result.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? '')
-        .join('')
-        .trim()
-      if (!generatedText) {
+      const { summary } = await postToApi('summary', { background })
+      if (typeof summary !== 'string' || !summary.trim()) {
         throw new Error('Gemini returned no summary. Please try again.')
       }
-      setResumeSummary(generatedText)
+      setResumeSummary(summary.trim())
     } catch (error) {
       setSummaryError(
         error instanceof Error ? error.message : 'Unable to generate a professional summary.',
