@@ -25,9 +25,11 @@ async function postToApi(endpoint, body) {
 
   let result
   try {
-    result = await response.json()
+    result = JSON.parse(await response.text())
   } catch {
-    throw new Error(`AI service returned an invalid response (${response.status}).`)
+    throw new Error(
+      'AI request reached a non-API page. Set VITE_API_BASE_URL to your Render backend Web Service URL (not the Static Site URL), then rebuild and redeploy the Static Site.',
+    )
   }
   if (!response.ok) {
     throw new Error(result.error || `AI service request failed (${response.status}).`)
